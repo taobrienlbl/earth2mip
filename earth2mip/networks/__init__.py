@@ -193,6 +193,7 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
         x: torch.Tensor,
         restart: Optional[Any] = None,
         normalize=True,
+        allow_grad=False,
     ) -> Iterator[Tuple[datetime.datetime, torch.Tensor, Any]]:
         """
         Args:
@@ -212,9 +213,9 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
         if restart:
             yield from self._iterate(**restart)
         else:
-            yield from self._iterate(x=x, time=time)
+            yield from self._iterate(x=x, time=time, normalize=normalize, allow_grad=allow_grad)
 
-    def _iterate(self, x, normalize=True, time=None):
+    def _iterate(self, x, normalize=True, time=None, allow_grad=False):
         """Yield (time, unnormalized data, restart) tuples
 
         restart = (time, unnormalized data)
@@ -222,7 +223,11 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
         if self.time_dependent and not time:
             raise ValueError("Time dependent models require ``time``.")
         time = time or datetime.datetime(1900, 1, 1)
-        with torch.no_grad():
+
+        # set the gradient context
+        grad_context = torch.enable_grad if allow_grad else torch.no_grad
+
+        with grad_context():
             # drop all but the last time point
             # remove channels
 
@@ -233,7 +238,7 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
                 x = (x - self.center) / self.scale
 
             # yield initial time for convenience
-            restart = dict(x=x, normalize=False, time=time)
+            restart = dict(x=x, normalize=False, time=time, allow_grad=allow_grad)
             yield time, self.scale * x[:, -1] + self.center, restart
 
             while True:
@@ -245,7 +250,7 @@ class Inference(torch.nn.Module, time_loop.TimeLoop):
                 time = time + self.time_step
 
                 # create args and kwargs for future use
-                restart = dict(x=x, normalize=False, time=time)
+                restart = dict(x=x, normalize=False, time=time, allow_grad=allow_grad)
                 out = self.scale * x[:, -1] + self.center
                 yield time, out, restart
 
